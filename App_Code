@@ -1,0 +1,212 @@
+# main.py
+
+from app import app, db
+from app.models import User
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+#__init__.py
+
+from flask import Flask, render_template, request
+from flask_sqlalchemy import SQLAlchemy
+from flask_bcrypt import Bcrypt
+from flask_login import LoginManager
+
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your_secret_key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///clicker.db'
+
+db = SQLAlchemy(app)
+bcrypt = Bcrypt(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+from app import routes, models
+
+#forms.py
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, SubmitField, BooleanField
+from wtforms.validators import DataRequired, Length, EqualTo, ValidationError
+
+from app.models import User
+
+class RegistrationForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired(), Length(min=2, max=20)])
+    password = PasswordField('Password', validators=[DataRequired()])
+    confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
+    submit = SubmitField('Регистрация')
+
+    def validate_username(self, username):
+        user = User.query.filter_by(username=username.data).first()
+        if user:
+            raise ValidationError('Такое имя уже существует.')
+
+class LoginForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired()])
+    password = PasswordField('Password', validators=[DataRequired()])
+    submit = SubmitField('Вход')
+
+#models.py
+
+from app import db
+from app import login_manager
+from flask_login import UserMixin
+
+
+class User(db.Model, UserMixin):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True, nullable=False)
+    password = db.Column(db.String(200), nullable=False)
+    clicks = db.Column(db.Integer, defaults=0)
+
+    def __repr__(self):
+        return f'User {self.username} - clicks: {self.clicks}'
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+#routes.py
+
+from flask import render_template, request, redirect, url_for, flash
+from app import app, db, bcrypt
+from app.models import User
+from app.forms import LoginForm, RegistrationForm
+from flask_login import login_user, logout_user, current_user, login_required
+
+@app.route('/')
+@login_required
+def index():
+    return render_template('index.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('index.html'))
+    form = RegistrationForm()
+    if form.validate_on_submit():
+        hashed_password = bcrypt.generate_password_hash(form.password.data).decode('utf-8')
+        user = User(username=form.username.data, password=hashed_password)
+        db.session.add(user)
+        db.session.commit()
+        flash('Вы успешно зарегистрировались!', 'success')
+        return redirect(url_for('login'))
+    return render_template("register.html", form=form)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('index.html'))
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.username.data).first()
+        if user and bcrypt.check_password_hash(user.password, form.password.data):
+            login_user(user)
+            return redirect(url_for('index'))
+        else:
+            flash('Неверно введены данные аккаунта', 'danger')
+    return render_template("login.html", form=form)
+
+@app.route('/logout', methods=['GET', 'POST'])
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+@app.route('/click')
+@login_required
+def click():
+    current_user.clicks += 1
+    db.session.commit()
+    return redirect(url_for('index'))
+
+#base.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+
+<nav>
+    <a href="{{ url for('index') }}">Игра</a>
+    {% if current_user.is_authenticated %}
+        <a href="{{ url for('logout') }}">Выход из аккаунта</a>
+    {% else %}
+        <a href="{{ url for('login') }}">Вход в аккаунт</a>
+        <a href="{{ url for('register') }}">Регистрация</a>
+    {% endif %}
+</nav>
+<div>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+             {% for category, message in messages %}
+                 <div>{{ message }}</div>
+             {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    {% block content %}
+
+    {% endblock %}
+</div>
+
+#index.html
+
+{% extends 'base.html' %}
+{% block content %}
+    <h1>Кликер!</h1>
+    <p>Количество кликов - {{ current_user.clicks }}</p>
+    <a href="{{url for('click') }}">Кнопка</a>
+{% endblock %}
+
+#login.html
+
+{% extends 'base.html' %}
+{% block content %}
+    <h1>Вход</h1>
+    <form method="post" action="{{ url for('login')}}">
+        {{ form.hidden_tag() }}
+        <div>
+            {{ form.username.label }}
+            {{ form.username }}
+        </div>
+        <div>
+            {{ form.password.label }}
+            {{ form.password }}
+        </div>
+        <div>
+            {{ form.submit }}
+        </div>
+    </form>
+{% endblock %}
+
+#register.html
+
+{% extends 'base.html' %}
+{% block content %}
+    <h1>Регистрация</h1>
+    <form method="post" action="{{ url for('register')}}">
+        {{ form.hidden_tag() }}
+        <div>
+            {{ form.username.label }}
+            {{ form.username }}
+        </div>
+        <div>
+            {{ form.password.label }}
+            {{ form.password }}
+        </div>
+        <div>
+            {{ form.confirm_password.label }}
+            {{ form.confirm_password }}
+        </div>
+        <div>
+            {{ form.submit }}
+        </div>
+    </form>
+{% endblock %}
+
